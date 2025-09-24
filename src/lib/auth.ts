@@ -1,4 +1,6 @@
+import 'server-only'
 import { NextAuthOptions } from 'next-auth'
+import { getServerSession } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { PrismaAdapter } from '@next-auth/prisma-adapter'
 import { prisma } from '@/lib/prisma'
@@ -58,4 +60,9 @@ export const authOptions: NextAuthOptions = {
       return session
     },
   },
+}
+
+// Helper to get the server session using the configured auth options
+export async function auth() {
+  return getServerSession(authOptions)
 }
