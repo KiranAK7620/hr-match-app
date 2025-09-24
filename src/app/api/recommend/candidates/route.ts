@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getOpenAI } from '@/lib/ai'
+import { getOpenAI, getAIConfig } from '@/lib/ai'
 import { CandidatesRecommendationSchema } from '@/lib/recommendationSchemas'
 
 export async function POST(req: Request) {
@@ -35,23 +35,46 @@ export async function POST(req: Request) {
       })),
     }
 
-    const system = `You are an HR assistant. Rank the best candidates for the given job. Return strict JSON {"items":[{"rank":number,"candidateId":string,"name":string,"score":number,"rationale":string}]}. Include top 3-5 only.`
+    const system = `You are an HR assistant. Rank the best candidates for the given job.
+Return strict JSON with this shape only:
+{"items":[{"rank":number,"candidateId":string,"name":string,"score":number,"rationale":string}]}.
+- Include top 3-5 only.
+- IMPORTANT: score MUST be a number between 0 and 1 (inclusive).`
     const userContent = `Job: ${JSON.stringify(input.job)}\nCandidates: ${JSON.stringify(input.candidates)}\nRespond with JSON only.`
 
     const openai = getOpenAI()
+    const { model, temperature } = getAIConfig()
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model,
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: userContent },
       ],
-      temperature: 0.2,
+      temperature,
     })
 
     const raw = completion.choices[0]?.message?.content ?? '{}'
     const cleaned = raw.replace(/^```json\n?|\n?```$/g, '')
 
-    const parsed = CandidatesRecommendationSchema.safeParse(JSON.parse(cleaned))
+    // Parse and normalize scores to [0,1] before schema validation
+    const json = JSON.parse(cleaned)
+    if (json && Array.isArray(json.items)) {
+      json.items = json.items.map((item: any, idx: number) => {
+        let score = item?.score
+        if (typeof score === 'string') {
+          const n = Number(score)
+          score = Number.isFinite(n) ? n : score
+        }
+        if (typeof score === 'number') {
+          if (score > 1 && score <= 100) score = score / 100
+          if (score > 1) score = 1
+          if (score < 0) score = 0
+        }
+        return { ...item, score, rank: item?.rank ?? idx + 1 }
+      })
+    }
+
+    const parsed = CandidatesRecommendationSchema.safeParse(json)
     if (!parsed.success) {
       return NextResponse.json({ error: 'AI response invalid', details: parsed.error.flatten() }, { status: 502 })
     }
